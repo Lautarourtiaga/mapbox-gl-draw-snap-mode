@@ -18,6 +18,7 @@ import distance from "@turf/distance";
 import polygonToLine from "@turf/polygon-to-line";
 import nearestPointOnLine from "@turf/nearest-point-on-line";
 import midpoint from "@turf/midpoint";
+import { featureCollection, featureReduce, nearestPoint} from "@turf/turf";
 
 export const IDS = {
   VERTICAL_GUIDE: "VERTICAL_GUIDE",
@@ -144,6 +145,7 @@ const calcLayerDistances = (lngLat, layer) => {
   const isMarker = layer.geometry.type === "Point";
   // is it a polygon?
   const isPolygon = layer.geometry.type === "Polygon";
+  const isMultiPolygon = layer.geometry.type === "MultiPolygon";
 
   let lines = undefined;
 
@@ -159,19 +161,27 @@ const calcLayerDistances = (lngLat, layer) => {
     };
   }
 
-  if (isPolygon) lines = polygonToLine(layer);
-  else lines = layer;
+  if (isPolygon) {
+    lines = polygonToLine(layer)
+  } else if (isMultiPolygon) {
+    lines = featureReduce(
+      polygonToLine(layer),
+      (someLines , otherLines) => nearestLine(P, someLines, otherLines)
+    )
+  } else {
+    lines = layer
+  }
 
-  const nearestPoint = nearestPointOnLine(lines, P);
-  const [lng, lat] = nearestPoint.geometry.coordinates;
+  const nearestPointFound = nearestPointOnLine(lines, P);
+  const [lng, lat] = nearestPointFound.geometry.coordinates;
 
-  let segmentIndex = nearestPoint.properties.index;
+  let segmentIndex = nearestPointFound.properties.index;
   if (segmentIndex + 1 === lines.geometry.coordinates.length) segmentIndex--;
 
   return {
     latlng: { lng, lat },
     segment: lines.geometry.coordinates.slice(segmentIndex, segmentIndex + 2),
-    distance: nearestPoint.properties.dist,
+    distance: nearestPointFound.properties.dist,
     isMarker,
   };
 };
@@ -412,3 +422,24 @@ export const shouldHideGuide = (state, geojson) => {
 
   return false;
 };
+
+function nearestLine (coordinates, firstLine, secondLine) {
+  const firstLineNearestPoint = nearestPointOnLine(firstLine, coordinates)
+
+  const secondLineNearestPoint = nearestPointOnLine(secondLine, coordinates)
+
+  const closestPoint = nearestPoint(coordinates, featureCollection([firstLineNearestPoint, secondLineNearestPoint]))
+
+  return areSamePoint(closestPoint, firstLineNearestPoint) ? firstLine : secondLine
+}
+
+function areSamePoint(aPoint, anotherPoint) {
+  return arrayEquals(aPoint.geometry.coordinates, anotherPoint.geometry.coordinates)
+}
+
+function arrayEquals(a, b) {
+  return Array.isArray(a) &&
+    Array.isArray(b) &&
+    a.length === b.length &&
+    a.every((val, index) => val === b[index]);
+}
